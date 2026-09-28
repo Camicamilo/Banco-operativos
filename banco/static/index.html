@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Banco concurrente</title>
+<style>
+  body { font-family: sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; color: #222; }
+  h1 { margin-bottom: 0; }
+  .tarjeta { border: 1px solid #ccc; border-radius: 8px; padding: 1rem; margin: 1rem 0; }
+  button { padding: .5rem 1rem; cursor: pointer; }
+  table { border-collapse: collapse; margin: .5rem 1rem .5rem 0; }
+  td, th { border: 1px solid #ddd; padding: .25rem .6rem; text-align: left; }
+  th { background: #f3f3f3; }
+  .resultados { display: flex; flex-wrap: wrap; }
+  .malo { color: #b00020; font-weight: bold; }
+  pre { background: #111; color: #ddd; padding: 1rem; overflow-x: auto; font-size: .8rem; }
+  label { margin-right: 1rem; }
+  input { width: 5rem; }
+</style>
+</head>
+<body>
+<h1>Banco concurrente</h1>
+<p>Procesa transacciones con hilos y muestra qué pasa con y sin sincronización.</p>
+
+<label>Hilos <input id="hilos" type="number" value="8" min="2" max="32"></label>
+<label>Operaciones por hilo <input id="operaciones" type="number" value="5000" min="10"></label>
+
+<div class="tarjeta">
+  <h2>1. Condición de carrera</h2>
+  <p>Varios hilos depositan $1 en la misma cuenta. Se corre sin lock y con lock.</p>
+  <button onclick="ejecutar('carrera')">Ejecutar</button>
+  <div id="carrera" class="resultados"></div>
+</div>
+
+<div class="tarjeta">
+  <h2>2. Cola productor-consumidor</h2>
+  <p>Los productores encolan transferencias y los consumidores las procesan. El total de dinero debe conservarse.</p>
+  <button onclick="ejecutar('cola')">Ejecutar</button>
+  <div id="cola" class="resultados"></div>
+</div>
+
+<div class="tarjeta">
+  <h2>3. Interbloqueo</h2>
+  <p>Dos transferencias cruzadas (A→B y B→A) a la vez. Primero con locks ingenuos y luego con locks ordenados.</p>
+  <button onclick="ejecutar('interbloqueo')">Ejecutar</button>
+  <div id="interbloqueo" class="resultados"></div>
+</div>
+
+<div class="tarjeta">
+  <h2>Procesos e hilos (vista del sistema operativo)</h2>
+  <p>Ejecútalo mientras corre un experimento para ver los procesos hijo y sus hilos.</p>
+  <button onclick="verProcesos()">Ver procesos</button>
+  <pre id="procesos">Aún no consultado.</pre>
+</div>
+
+<script>
+// Dibuja un objeto como tabla; si un valor es otro objeto, lo dibuja como otra tabla.
+function tabla(titulo, datos) {
+  let filas = "";
+  for (const [clave, valor] of Object.entries(datos)) {
+    if (valor !== null && typeof valor === "object") continue;
+    const malo = (clave === "dinero_perdido" && valor > 0) || valor === "bloqueo";
+    filas += `<tr><td>${clave}</td><td class="${malo ? "malo" : ""}">${valor}</td></tr>`;
+  }
+  let html = `<table><tr><th colspan="2">${titulo}</th></tr>${filas}</table>`;
+  for (const [clave, valor] of Object.entries(datos)) {
+    if (valor !== null && typeof valor === "object") html += tabla(clave, valor);
+  }
+  return html;
+}
+
+async function ejecutar(nombre) {
+  const destino = document.getElementById(nombre);
+  destino.textContent = "Ejecutando...";
+  const hilos = document.getElementById("hilos").value;
+  const operaciones = document.getElementById("operaciones").value;
+  const r = await fetch(`/api/${nombre}?hilos=${hilos}&operaciones=${operaciones}`, { method: "POST" });
+  const datos = await r.json();
+  // La cola devuelve un solo resultado; los otros devuelven uno por variante.
+  destino.innerHTML = nombre === "cola" ? tabla("resultado", datos)
+    : Object.entries(datos).map(([k, v]) => tabla(k, v)).join("");
+}
+
+async function verProcesos() {
+  const r = await fetch("/api/procesos");
+  const d = await r.json();
+  document.getElementById("procesos").textContent =
+    `PID del servidor: ${d.pid_servidor}\n\n$ pstree -p\n${d.pstree}\n$ ps -eLf\n${d["ps -eLf"]}`;
+}
+</script>
+</body>
+</html>
