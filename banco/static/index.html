@@ -17,6 +17,8 @@
   pre { background: #111; color: #ddd; padding: 1rem; overflow-x: auto; font-size: .8rem; }
   label { margin-right: 1rem; }
   input { width: 5rem; }
+  .nota { font-size: .85rem; color: #666; }
+  .ancha { overflow-x: auto; width: 100%; }
 </style>
 </head>
 <body>
@@ -25,26 +27,56 @@
 
 <label>Hilos <input id="hilos" type="number" value="8" min="2" max="32"></label>
 <label>Operaciones por hilo <input id="operaciones" type="number" value="5000" min="10"></label>
+<label>Procesos <input id="num_procesos" type="number" value="3" min="1" max="16"></label>
+<p class="nota">La cola y los procesos usan operaciones/10 por hilo; la auditoría usa operaciones/2.</p>
 
 <div class="tarjeta">
   <h2>1. Condición de carrera</h2>
-  <p>Varios hilos depositan $1 en la misma cuenta. Se corre sin lock y con lock.</p>
+  <p>Varios hilos depositan $1 repartidos en 5 cuentas. Se corre sin lock y con lock.</p>
   <button onclick="ejecutar('carrera')">Ejecutar</button>
   <div id="carrera" class="resultados"></div>
 </div>
 
 <div class="tarjeta">
   <h2>2. Cola productor-consumidor</h2>
-  <p>Los productores encolan transferencias y los consumidores las procesan. El total de dinero debe conservarse.</p>
+  <p>Los productores encolan depósitos, retiros, transferencias y consultas; los consumidores las procesan.
+     Los retiros y transferencias sin saldo se rechazan. Debe cumplirse: inicial + depositado − retirado = final.</p>
   <button onclick="ejecutar('cola')">Ejecutar</button>
   <div id="cola" class="resultados"></div>
 </div>
 
 <div class="tarjeta">
   <h2>3. Interbloqueo</h2>
-  <p>Dos transferencias cruzadas (A→B y B→A) a la vez. Primero con locks ingenuos y luego con locks ordenados.</p>
+  <p>Dos transferencias cruzadas (A→B y B→A) a la vez. Primero con locks ingenuos y luego con locks ordenados.
+     Sube la espera y el timeout (ej. 5 y 10) para alcanzar a capturarlo con <code>observar.sh</code>.</p>
+  <label>Espera (s) <input id="espera" type="number" value="0.1" min="0" step="0.1"></label>
+  <label>Timeout (s) <input id="timeout" type="number" value="1" min="0.1" step="0.5"></label>
   <button onclick="ejecutar('interbloqueo')">Ejecutar</button>
   <div id="interbloqueo" class="resultados"></div>
+</div>
+
+<div class="tarjeta">
+  <h2>4. Varios procesos trabajadores</h2>
+  <p>El servidor encola transacciones en una cola entre procesos; varios procesos hijo, cada uno con varios hilos,
+     las procesan sobre saldos en memoria compartida. Sin lock los procesos se pisan entre sí.</p>
+  <button onclick="ejecutar('multiproceso')">Ejecutar</button>
+  <div id="multiproceso" class="resultados"></div>
+</div>
+
+<div class="tarjeta">
+  <h2>5. Auditoría: CPU y memoria</h2>
+  <p>Cada trabajador firma transacciones (CPU) y guarda un libro que crece (memoria). La misma carga se corre
+     con N hilos en un proceso y con N procesos. <b>nucleos_usados</b> = CPU / tiempo real: por el GIL los hilos
+     no pasan de ~1.</p>
+  <button onclick="ejecutar('auditoria')">Ejecutar</button>
+  <div id="auditoria" class="resultados"></div>
+</div>
+
+<div class="tarjeta">
+  <h2>Estadísticas registradas</h2>
+  <p>Últimas filas de <code>resultados/estadisticas.csv</code> (cada ejecución se guarda automáticamente).</p>
+  <button onclick="verEstadisticas()">Ver estadísticas</button>
+  <div id="estadisticas" class="resultados"></div>
 </div>
 
 <div class="tarjeta">
@@ -55,17 +87,35 @@
 </div>
 
 <script>
+// Una lista de objetos se dibuja como una tabla con columnas.
+function tablaLista(titulo, lista) {
+  const columnas = Object.keys(lista[0]).filter(c => typeof lista[0][c] !== "object");
+  const cab = columnas.map(c => `<th>${c}</th>`).join("");
+  const filas = lista.map(f => `<tr>${columnas.map(c => `<td>${f[c]}</td>`).join("")}</tr>`).join("");
+  return `<div class="ancha"><table><tr><th colspan="${columnas.length}">${titulo}</th></tr>
+          <tr>${cab}</tr>${filas}</table></div>`;
+}
+
 // Dibuja un objeto como tabla; si un valor es otro objeto, lo dibuja como otra tabla.
 function tabla(titulo, datos) {
   let filas = "";
   for (const [clave, valor] of Object.entries(datos)) {
     if (valor !== null && typeof valor === "object") continue;
-    const malo = (clave === "dinero_perdido" && valor > 0) || valor === "bloqueo";
+    const malo = (clave === "dinero_perdido" && valor > 0) || valor === "bloqueo" || valor === false
+      || (clave === "diferencia" && valor !== 0);
     filas += `<tr><td>${clave}</td><td class="${malo ? "malo" : ""}">${valor}</td></tr>`;
   }
   let html = `<table><tr><th colspan="2">${titulo}</th></tr>${filas}</table>`;
   for (const [clave, valor] of Object.entries(datos)) {
-    if (valor !== null && typeof valor === "object") html += tabla(clave, valor);
+    if (Array.isArray(valor) && valor.length) html += tablaLista(`${titulo} · ${clave}`, valor);
+    else if (valor !== null && typeof valor === "object" && !Array.isArray(valor)) {
+      const hijos = Object.values(valor);
+      // {C0: {...}, C1: {...}} -> una sola tabla con una fila por clave
+      if (hijos.length && hijos.every(h => h !== null && typeof h === "object"))
+        html += tablaLista(`${titulo} · ${clave}`,
+                           Object.entries(valor).map(([k, v]) => ({ [clave]: k, ...v })));
+      else html += tabla(`${titulo} · ${clave}`, valor);
+    }
   }
   return html;
 }
@@ -73,20 +123,28 @@ function tabla(titulo, datos) {
 async function ejecutar(nombre) {
   const destino = document.getElementById(nombre);
   destino.textContent = "Ejecutando...";
-  const hilos = document.getElementById("hilos").value;
-  const operaciones = document.getElementById("operaciones").value;
-  const r = await fetch(`/api/${nombre}?hilos=${hilos}&operaciones=${operaciones}`, { method: "POST" });
+  const params = new URLSearchParams();
+  for (const id of ["hilos", "operaciones", "espera", "timeout"])
+    params.set(id, document.getElementById(id).value);
+  params.set("procesos", document.getElementById("num_procesos").value);
+  const r = await fetch(`/api/${nombre}?${params}`, { method: "POST" });
   const datos = await r.json();
-  // La cola devuelve un solo resultado; los otros devuelven uno por variante.
-  destino.innerHTML = nombre === "cola" ? tabla("resultado", datos)
-    : Object.entries(datos).map(([k, v]) => tabla(k, v)).join("");
+  // Cada experimento devuelve un resultado por variante (sin_lock, con_lock, hilos, procesos...).
+  destino.innerHTML = Object.entries(datos).map(([k, v]) => tabla(k, v)).join("");
+}
+
+async function verEstadisticas() {
+  const r = await fetch("/api/estadisticas");
+  const filas = await r.json();
+  document.getElementById("estadisticas").innerHTML =
+    filas.length ? tablaLista("estadisticas.csv", filas) : "Aún no hay ejecuciones registradas.";
 }
 
 async function verProcesos() {
   const r = await fetch("/api/procesos");
   const d = await r.json();
   document.getElementById("procesos").textContent =
-    `PID del servidor: ${d.pid_servidor}\n\n$ pstree -p\n${d.pstree}\n$ ps -eLf\n${d["ps -eLf"]}`;
+    `PID del servidor: ${d.pid_servidor}\n\n$ pstree -pt\n${d.pstree}\n$ ps -eLf\n${d["ps -eLf"]}`;
 }
 </script>
 </body>

@@ -17,7 +17,7 @@ def ver_procesos():
     pid = os.getpid()
     filtro = f"$1=={pid} || $2=={pid} || NR==1"   # el servidor, sus hijos y el encabezado
     comandos = {
-        "pstree": ["pstree", "-p", str(pid)],
+        "pstree": ["pstree", "-pt", str(pid)],
         "ps -eLf": ["sh", "-c", f"ps -eLf | awk '{filtro}'"],
     }
     salida = {}
@@ -37,19 +37,27 @@ class Manejador(BaseHTTPRequestHandler):
                 self.responder(200, f.read(), "text/html; charset=utf-8")
         elif self.path == "/api/procesos":
             self.responder_json(ver_procesos())
+        elif self.path == "/api/estadisticas":
+            self.responder_json(experimentos.ultimas_estadisticas())
         else:
             self.responder_json({"error": "no encontrado"}, 404)
 
     def do_POST(self):
         url = urlparse(self.path)
-        p = {k: int(v[0]) for k, v in parse_qs(url.query).items()}
-        hilos, operaciones = p.get("hilos", 8), p.get("operaciones", 5000)
+        p = {k: float(v[0]) for k, v in parse_qs(url.query).items()}
+        hilos, operaciones = int(p.get("hilos", 8)), int(p.get("operaciones", 5000))
+        procesos = int(p.get("procesos", 3))
         if url.path == "/api/carrera":
             self.responder_json(experimentos.carrera(hilos, operaciones))
         elif url.path == "/api/cola":
             self.responder_json(experimentos.cola(hilos, operaciones // 10))
         elif url.path == "/api/interbloqueo":
-            self.responder_json(experimentos.interbloqueo())
+            self.responder_json(experimentos.interbloqueo(p.get("espera", 0.1),
+                                                          p.get("timeout", 1)))
+        elif url.path == "/api/multiproceso":
+            self.responder_json(experimentos.multiproceso(procesos, hilos, operaciones // 10))
+        elif url.path == "/api/auditoria":
+            self.responder_json(experimentos.auditoria(hilos, operaciones // 2))
         else:
             self.responder_json({"error": "no encontrado"}, 404)
 
@@ -65,5 +73,6 @@ class Manejador(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":  # necesario: los procesos hijos (spawn) reimportan este módulo
+    experimentos.nombrar_en_so("banco-servidor")
     print(f"Servidor PID {os.getpid()} en http://0.0.0.0:{PUERTO}")
     ThreadingHTTPServer(("0.0.0.0", PUERTO), Manejador).serve_forever()
