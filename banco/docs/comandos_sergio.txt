@@ -1,0 +1,71 @@
+===============================================================================
+ PROYECTO 4 - BANCO CONCURRENTE
+ Comandos de Sergio Parra (y de apoyo para la demo)
+===============================================================================
+
+ Todo se corre dentro de la carpeta banco/ (NO dentro de evidencias/):
+     cd ~/Banco-operativos/banco
+ El servidor debe estar corriendo en otra terminal:  python3 servidor.py
+ Cada bloque se copia COMPLETO.
+
+
+###############################################################################
+ 1. COMPARAR LA CARRERA EN CONSOLA: version con problema vs corregida
+###############################################################################
+
+ Paso 1: crear el script (copiar el bloque completo, desde "cat" hasta "EOF")
+
+cat > comparar_consola.sh <<'EOF'
+#!/bin/sh
+# Lanzarlo ANTES de dar clic en "Ejecutar" en la tarjeta 1 (carrera).
+mostrar() {
+  P=$1
+  echo
+  echo "================ $2 · PID $P ================"
+  ps -L -o lwp,comm,stat,%cpu,wchan:20 -p "$P"
+  echo "-- En qué estaban los 8 hilos (10 fotos, cada 0,1 s):"
+  for i in 1 2 3 4 5 6 7 8 9 10; do ps -L -o comm=,wchan= -p "$P" | grep hilo; sleep 0.1; done \
+    | awk '{print $2}' | sort | uniq -c
+  top -H -b -n 1 -p "$P" | grep -E "^%Cpu"
+}
+while ! P1=$(pgrep -x carrera-0); do sleep 0.05; done; sleep 0.5
+mostrar "$P1" "VERSIÓN CON PROBLEMA"
+while P=$(pgrep -x carrera-0); [ -z "$P" ] || [ "$P" = "$P1" ]; do sleep 0.05; done; sleep 0.5
+mostrar "$P" "VERSIÓN CORREGIDA (lock_por_cuenta)"
+EOF
+
+ Paso 2: lanzarlo (se queda esperando)
+
+sh comparar_consola.sh
+
+ Paso 3: en la pagina, tarjeta 1, dar clic en "Ejecutar"
+         (sugerido: Hilos = 8, Operaciones por hilo = 100000)
+ El script detecta solo la version con problema y luego la corregida.
+
+
+###############################################################################
+ 2. AUDITORIA: capturar la fase de hilos y la fase de procesos
+###############################################################################
+
+ Pegar ANTES de dar clic en "Ejecutar" en la tarjeta 5 (auditoria).
+ Espera solo a cada fase y guarda una captura de cada una en evidencias/.
+
+while ! pgrep -x auditoria-0 >/dev/null; do sleep 0.2; done; sleep 2; sh observar.sh auditoria_hilos; while ! pgrep '^auditor-' >/dev/null; do sleep 0.2; done; sleep 1; sh observar.sh auditoria_procesos
+
+
+###############################################################################
+ 3. INTERBLOQUEO: en que esta esperando cada hilo (futex)
+###############################################################################
+
+ En la pagina, tarjeta 3: Espera = 5, Timeout = 10, clic en "Ejecutar".
+ Correr esto a los ~7 segundos (mientras dura el bloqueo):
+
+ps -L -o pid,lwp,comm,stat,%cpu,wchan:25 -p $(pgrep -x interbloqueo-0)
+
+
+-------------------------------------------------------------------------------
+ ACTUALIZAR EL REPOSITORIO EN LA VM
+-------------------------------------------------------------------------------
+
+cd ~/Banco-operativos
+git pull origin main-olmpb1
