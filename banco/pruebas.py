@@ -5,7 +5,7 @@ Uso:
     python3 pruebas.py --rapido   # menos operaciones, para probar que todo funciona
 
 Imprime una tabla comparativa, la guarda en resultados/comparativa_<fecha>.csv
-y .md, y verifica que las versiones sincronizadas den el resultado correcto.
+y .md, y verifica que todas las variantes corregidas den el resultado correcto.
 Cada ejecución también queda en resultados/estadisticas.csv.
 """
 
@@ -44,26 +44,30 @@ def main():
     for h in CARGAS:
         print(f"--- {h} hilos ---", flush=True)
         r = experimentos.carrera(h, ops)
-        filas.append(fila("carrera", "sin_lock", r["sin_lock"], "(se espera pérdida)"))
-        ok = r["con_lock"]["obtenido"] == r["con_lock"]["esperado"]
-        filas.append(fila("carrera", "con_lock", r["con_lock"], revisar(f"carrera {h}", ok)))
+        filas.append(fila("carrera", "con_problema", r["con_problema"], "(se espera pérdida)"))
+        for v in ("lock_por_cuenta", "lock_global", "dueno_por_cuenta"):
+            ok = r[v]["obtenido"] == r[v]["esperado"]
+            filas.append(fila("carrera", v, r[v], revisar(f"carrera {v} {h}", ok)))
 
-        r = experimentos.cola(h, ops // 10)["con_lock"]
-        filas.append(fila("cola", "con_lock", r, revisar(f"cola {h}", r["cuadra"])))
+        r = experimentos.cola(h, ops // 10)
+        filas.append(fila("cola", "con_problema", r["con_problema"], "(puede no cuadrar)"))
+        filas.append(fila("cola", "corregido", r["corregido"],
+                          revisar(f"cola {h}", r["corregido"]["cuadra"])))
 
         r = experimentos.multiproceso(2, h, ops // 20)
-        filas.append(fila("multiproceso", "sin_lock", r["sin_lock"], "(puede no cuadrar)"))
-        filas.append(fila("multiproceso", "con_lock", r["con_lock"],
-                          revisar(f"multiproceso {h}", r["con_lock"]["cuadra"])))
+        filas.append(fila("multiproceso", "con_problema", r["con_problema"], "(puede no cuadrar)"))
+        filas.append(fila("multiproceso", "corregido", r["corregido"],
+                          revisar(f"multiproceso {h}", r["corregido"]["cuadra"])))
 
         r = experimentos.auditoria(h, ops // 10 if rapido else ops // 5)
         filas.append(fila("auditoria", "hilos", r["hilos"], "-"))
         filas.append(fila("auditoria", "procesos", r["procesos"], "-"))
 
     r = experimentos.interbloqueo()
-    filas.append(fila("interbloqueo", "ingenuo", r["ingenuo"], "(se espera bloqueo)"))
-    ok = all(v == "ok" for v in r["ordenado"]["resultados"].values())
-    filas.append(fila("interbloqueo", "ordenado", r["ordenado"], revisar("interbloqueo", ok)))
+    filas.append(fila("interbloqueo", "con_problema", r["con_problema"], "(se espera bloqueo)"))
+    for v in ("orden_global", "reintento"):
+        ok = all(x == "ok" for x in r[v]["resultados"].values())
+        filas.append(fila("interbloqueo", v, r[v], revisar(f"interbloqueo {v}", ok)))
 
     guardar(filas)
     print()
@@ -72,7 +76,7 @@ def main():
     if fallas:
         print("FALLARON:", ", ".join(fallas))
         sys.exit(1)
-    print("Todas las versiones sincronizadas dieron el resultado correcto.")
+    print("Todas las variantes corregidas dieron el resultado correcto.")
 
 
 def como_markdown(filas):

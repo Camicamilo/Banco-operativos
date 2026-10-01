@@ -1,5 +1,8 @@
 """Los experimentos. Cada uno corre en uno o varios procesos hijo con varios hilos.
 
+Cada experimento ejecuta el mismo flujo con la versión con problema
+(banco_con_problema.py) y con la versión corregida (banco_corregido.py).
+
 Cada ejecución queda registrada en resultados/estadisticas.csv (una fila por
 variante) y en resultados/ejecuciones.jsonl (el resultado completo).
 """
@@ -15,9 +18,12 @@ import random
 import threading
 import time
 
-from banco import (Contador, Cuenta, CuentaCompartida, depositar_con_lock,
-                   depositar_sin_lock, nueva_transaccion, procesar,
-                   transferir_ingenuo, transferir_ordenado)
+import banco_con_problema as con_problema
+import banco_corregido as corregido
+from cuentas import Contador, Cuenta, CuentaCompartida, nueva_transaccion
+
+# Los dos módulos tienen las mismas funciones: el experimento elige cuál usar.
+VERSIONES = {"con_problema": con_problema, "corregido": corregido}
 
 CARPETA_RESULTADOS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "resultados")
 CONTEXTO = multiprocessing.get_context("spawn")  # cada hijo arranca un intérprete nuevo
@@ -198,10 +204,24 @@ def ultimas_estadisticas(cantidad=30):
 
 # --- 1. Condición de carrera (varias cuentas) ------------------------------
 
-def _carrera(hilos, operaciones, con_lock, cantidad_cuentas):
+def _carrera(hilos, operaciones, variante, cantidad_cuentas):
     cuentas = [Cuenta(f"C{i}", 0) for i in range(cantidad_cuentas)]
-    depositar = depositar_con_lock if con_lock else depositar_sin_lock
     esperado = [[0] * cantidad_cuentas for _ in range(hilos)]  # cada hilo anota lo suyo
+    duenos, hilos_duenos = [], []
+
+    if variante == "con_problema":
+        depositar = con_problema.depositar
+    elif variante == "lock_por_cuenta":
+        depositar = corregido.depositar
+    elif variante == "lock_global":
+        depositar = corregido.depositar_lock_global
+    else:  # dueno_por_cuenta: un hilo dueño por cuenta; los demás le envían los depósitos
+        duenos = [corregido.DuenoDeCuenta(c) for c in cuentas]
+        hilos_duenos = [threading.Thread(target=_con_nombre(d.atender), name=f"dueno-{d.cuenta.id}")
+                        for d in duenos]
+        for h in hilos_duenos:
+            h.start()
+        depositar = lambda cuenta, monto: duenos[cuentas.index(cuenta)].depositar(monto)
 
     def trabajo(i):
         for j in range(operaciones):
@@ -210,6 +230,10 @@ def _carrera(hilos, operaciones, con_lock, cantidad_cuentas):
             esperado[i][k] += 1
 
     _correr_hilos(trabajo, hilos)
+    for d in duenos:                # los dueños terminan de aplicar lo que tienen en su buzón
+        d.cerrar()
+    for h in hilos_duenos:
+        h.join()
     por_cuenta = {}
     for k, c in enumerate(cuentas):
         debia = sum(e[k] for e in esperado)
@@ -221,10 +245,13 @@ def _carrera(hilos, operaciones, con_lock, cantidad_cuentas):
             "por_cuenta": por_cuenta}
 
 
+VARIANTES_CARRERA = ("con_problema", "lock_por_cuenta", "lock_global", "dueno_por_cuenta")
+
+
 def carrera(hilos=8, operaciones=5000, cuentas=5):
-    return registrar("carrera", {
-        "sin_lock": _en_proceso(_carrera, hilos, operaciones, False, cuentas),
-        "con_lock": _en_proceso(_carrera, hilos, operaciones, True, cuentas)})
+    """La misma carga con la versión con problema y con tres correcciones distintas."""
+    return registrar("carrera", {v: _en_proceso(_carrera, hilos, operaciones, v, cuentas)
+                                 for v in VARIANTES_CARRERA})
 
 
 # --- 2. Cola productor-consumidor (todos los tipos de transacción) ---------
@@ -232,7 +259,8 @@ def carrera(hilos=8, operaciones=5000, cuentas=5):
 SALDO_INICIAL = 500
 
 
-def _cola(hilos, operaciones, cantidad_cuentas=5):
+def _cola(hilos, operaciones, version, cantidad_cuentas=5):
+    banco = VERSIONES[version]
     cuentas = [Cuenta(f"C{i}", SALDO_INICIAL) for i in range(cantidad_cuentas)]
     total_inicial = sum(c.saldo for c in cuentas)
     pendientes = queue.Queue(maxsize=100)  # si se llena, los productores esperan
@@ -250,7 +278,7 @@ def _cola(hilos, operaciones, cantidad_cuentas=5):
             if tarea is None:       # señal de fin
                 return
             tipo, origen, destino, monto = tarea
-            hecha = procesar(tipo, cuentas[origen], cuentas[destino], monto)
+            hecha = banco.procesar(tipo, cuentas[origen], cuentas[destino], monto)
             contadores[i].anotar(tipo, monto, hecha)
             procesadas[f"consumidor-{i}"] += 1
 
@@ -279,40 +307,48 @@ def _cola(hilos, operaciones, cantidad_cuentas=5):
 
 
 def cola(hilos=4, operaciones=500):
-    return registrar("cola", {"con_lock": _en_proceso(_cola, hilos, operaciones)})
+    """La cola es segura en ambas versiones; lo que cambia es cómo se tocan las cuentas."""
+    return registrar("cola", {v: _en_proceso(_cola, hilos, operaciones, v) for v in VERSIONES})
 
 
 # --- 3. Interbloqueo -------------------------------------------------------
 
-def _interbloqueo(ordenado, espera, timeout):
+def _interbloqueo(variante, espera, timeout):
     a, b = Cuenta("A", 1000), Cuenta("B", 1000)
-    resultados = {}
+    resultados, intentos = {}, {}
 
     def trabajo(i):
         origen, destino = (a, b) if i == 0 else (b, a)
-        if ordenado:
-            r = transferir_ordenado(origen, destino, 100, espera)
-        else:
-            r = transferir_ingenuo(origen, destino, 100, espera, timeout)
-        resultados[f"{origen.id}->{destino.id}"] = r
+        clave = f"{origen.id}->{destino.id}"
+        if variante == "con_problema":
+            r = con_problema.transferir_ingenuo(origen, destino, 100, espera, timeout)
+        elif variante == "orden_global":
+            r = "ok" if corregido.transferir(origen, destino, 100, espera) else "rechazada"
+        else:  # reintento
+            r, intentos[clave] = corregido.transferir_reintentando(origen, destino, 100, espera)
+        resultados[clave] = r
 
     _correr_hilos(trabajo, 2)
-    return {"hilos": 2, "procesos": 1, "operaciones": 2, "resultados": resultados,
-            "esperado": 2000, "obtenido": a.saldo + b.saldo,
-            "rechazadas": sum(r != "ok" for r in resultados.values())}
+    resultado = {"hilos": 2, "procesos": 1, "operaciones": 2, "resultados": resultados,
+                 "esperado": 2000, "obtenido": a.saldo + b.saldo,
+                 "rechazadas": sum(r != "ok" for r in resultados.values())}
+    if intentos:
+        resultado["intentos"] = intentos
+    return resultado
 
 
 def interbloqueo(espera=0.1, timeout=1):
     """`espera` y `timeout` largos (ej. 5 y 10 s) dejan tiempo de capturarlo con observar.sh."""
     return registrar("interbloqueo", {
-        "ingenuo": _en_proceso(_interbloqueo, False, espera, timeout),
-        "ordenado": _en_proceso(_interbloqueo, True, espera, timeout)})
+        v: _en_proceso(_interbloqueo, v, espera, timeout)
+        for v in ("con_problema", "orden_global", "reintento")})
 
 
 # --- 4. Varios procesos trabajadores con memoria compartida ----------------
 
-def _proceso_trabajador(hilos, tareas, saldos, locks, con_lock):
+def _proceso_trabajador(hilos, tareas, saldos, locks, version):
     """Un proceso hijo: `hilos` hilos sacan transacciones de la cola entre procesos."""
+    banco = VERSIONES[version]
     cuentas = [CuentaCompartida(i, saldos, lock) for i, lock in enumerate(locks)]
     contadores = [Contador() for _ in range(hilos)]
 
@@ -322,7 +358,7 @@ def _proceso_trabajador(hilos, tareas, saldos, locks, con_lock):
             if tarea is None:
                 return
             tipo, origen, destino, monto = tarea
-            hecha = procesar(tipo, cuentas[origen], cuentas[destino], monto, con_lock)
+            hecha = banco.procesar(tipo, cuentas[origen], cuentas[destino], monto)
             contadores[i].anotar(tipo, monto, hecha)
 
     _correr_hilos(trabajo, hilos)
@@ -334,7 +370,7 @@ def _proceso_trabajador(hilos, tareas, saldos, locks, con_lock):
             "contador": total.como_dict()}
 
 
-def _multiproceso(procesos, hilos, operaciones, con_lock, cantidad_cuentas=5):
+def _multiproceso(procesos, hilos, operaciones, version, cantidad_cuentas=5):
     # Los saldos viven en memoria compartida; lock=False porque sincronizamos a mano
     saldos = CONTEXTO.Array("q", [SALDO_INICIAL] * cantidad_cuentas, lock=False)
     locks = [CONTEXTO.Lock() for _ in range(cantidad_cuentas)]  # un lock por cuenta
@@ -344,7 +380,7 @@ def _multiproceso(procesos, hilos, operaciones, con_lock, cantidad_cuentas=5):
 
     buzon = CONTEXTO.Queue()
     hijos = [CONTEXTO.Process(target=_trabajador, name=f"trabajador-{p}",
-                              args=(_proceso_trabajador, (hilos, tareas, saldos, locks, con_lock),
+                              args=(_proceso_trabajador, (hilos, tareas, saldos, locks, version),
                                     buzon, None))
              for p in range(procesos)]
     for h in hijos:
@@ -376,9 +412,8 @@ def _multiproceso(procesos, hilos, operaciones, con_lock, cantidad_cuentas=5):
 
 
 def multiproceso(procesos=3, hilos=4, operaciones=500):
-    return registrar("multiproceso", {
-        "sin_lock": _multiproceso(procesos, hilos, operaciones, False),
-        "con_lock": _multiproceso(procesos, hilos, operaciones, True)})
+    return registrar("multiproceso", {v: _multiproceso(procesos, hilos, operaciones, v)
+                                      for v in VERSIONES})
 
 
 # --- 5. Auditoría: carga de CPU y memoria (hilos vs procesos) --------------

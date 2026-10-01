@@ -171,6 +171,22 @@
   .ancha table { min-width: 15rem; }
   .ancha td { white-space: nowrap; }
 
+  /* Resultados separados por versión */
+  .resultados:has(> .grupo) { flex-direction: column; gap: 1.75rem; }
+  .grupo { width: 100%; }
+  .grupo-titulo {
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: .35rem .75rem;
+    margin: 0 0 .75rem; font-size: 1rem; font-weight: 650; color: var(--tinta);
+  }
+  .grupo-titulo code { font-size: .8rem; }
+  .etiqueta {
+    font-size: .75rem; font-weight: 600; line-height: 1;
+    padding: .3rem .55rem; border-radius: 999px; border: 1px solid currentColor;
+  }
+  .etiqueta-problema { color: var(--error); background: var(--error-fondo); }
+  .etiqueta-corregido { color: var(--acento); background: var(--superficie); }
+  .grupo .tablas { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 1rem; }
+
   /* Salida de comandos del sistema operativo */
   pre {
     margin: 1.25rem 0 0; padding: 1rem 1.15rem;
@@ -214,7 +230,9 @@
 <main class="contenedor">
 <section class="tarjeta">
   <h2>1. Condición de carrera</h2>
-  <p>Varios hilos depositan $1 repartidos en 5 cuentas. Se corre sin lock y con lock.</p>
+  <p>Varios hilos depositan $1 repartidos en 5 cuentas. Se corre con la versión con problema y con tres
+     correcciones: <b>lock_por_cuenta</b>, <b>lock_global</b> (también corrige, pero serializa todo el banco) y
+     <b>dueno_por_cuenta</b> (un solo hilo modifica cada cuenta y los demás le envían los depósitos, sin locks).</p>
   <div class="acciones">
     <button onclick="ejecutar('carrera')">Ejecutar</button>
   </div>
@@ -224,7 +242,8 @@
 <section class="tarjeta">
   <h2>2. Cola productor-consumidor</h2>
   <p>Los productores encolan depósitos, retiros, transferencias y consultas; los consumidores las procesan.
-     Los retiros y transferencias sin saldo se rechazan. Debe cumplirse: inicial + depositado − retirado = final.</p>
+     Los retiros y transferencias sin saldo se rechazan. Debe cumplirse: inicial + depositado − retirado = final.
+     La cola es segura en las dos versiones: lo que cambia es cómo se modifican las cuentas.</p>
   <div class="acciones">
     <button onclick="ejecutar('cola')">Ejecutar</button>
   </div>
@@ -233,8 +252,11 @@
 
 <section class="tarjeta">
   <h2>3. Interbloqueo</h2>
-  <p>Dos transferencias cruzadas (A→B y B→A) a la vez. Primero con locks ingenuos y luego con locks ordenados.
-     Sube la espera y el timeout (ej. 5 y 10) para alcanzar a capturarlo con <code>observar.sh</code>.</p>
+  <p>Dos transferencias cruzadas (A→B y B→A) a la vez. La versión con problema toma los locks en el orden de
+     la transferencia. Se corrige de dos formas: <b>orden_global</b> (siempre la cuenta menor primero: rompe la
+     espera circular) y <b>reintento</b> (si no consigue la segunda cuenta, suelta la primera y vuelve a intentar:
+     rompe la retención y espera). Sube la espera y el timeout (ej. 5 y 10) para alcanzar a capturarlo con
+     <code>observar.sh</code>.</p>
   <div class="acciones">
     <label>Espera (s) <input id="espera" type="number" value="0.1" min="0" step="0.1"></label>
     <label>Timeout (s) <input id="timeout" type="number" value="1" min="0.1" step="0.5"></label>
@@ -246,7 +268,7 @@
 <section class="tarjeta">
   <h2>4. Varios procesos trabajadores</h2>
   <p>El servidor encola transacciones en una cola entre procesos; varios procesos hijo, cada uno con varios hilos,
-     las procesan sobre saldos en memoria compartida. Sin lock los procesos se pisan entre sí.</p>
+     las procesan sobre saldos en memoria compartida. En la versión con problema los procesos se pisan entre sí.</p>
   <div class="acciones">
     <button onclick="ejecutar('multiproceso')">Ejecutar</button>
   </div>
@@ -298,7 +320,7 @@ function tabla(titulo, datos) {
   let filas = "";
   for (const [clave, valor] of Object.entries(datos)) {
     if (valor !== null && typeof valor === "object") continue;
-    const malo = (clave === "dinero_perdido" && valor > 0) || valor === "bloqueo" || valor === false
+    const malo = (clave === "dinero_perdido" && valor > 0) || valor === "bloqueo" || valor === "agotado" || valor === false
       || (clave === "diferencia" && valor !== 0);
     filas += `<tr><td>${clave}</td><td class="${malo ? "malo" : ""}">${valor}</td></tr>`;
   }
@@ -317,6 +339,20 @@ function tabla(titulo, datos) {
   return html;
 }
 
+// Separa los resultados en "versión con problema" y "versión corregida".
+// Si el experimento no compara versiones (auditoría), los dibuja tal cual.
+function porVersion(datos) {
+  const variantes = Object.entries(datos);
+  const problema = variantes.filter(([k]) => k === "con_problema");
+  if (!problema.length) return variantes.map(([k, v]) => tabla(k, v)).join("");
+  const corregidas = variantes.filter(([k]) => k !== "con_problema");
+  const grupo = (clase, texto, archivo, lista) =>
+    `<div class="grupo"><h3 class="grupo-titulo"><span class="etiqueta ${clase}">${texto}</span>
+     <code>${archivo}</code></h3><div class="tablas">${lista.map(([k, v]) => tabla(k, v)).join("")}</div></div>`;
+  return grupo("etiqueta-problema", "Versión con problema", "banco_con_problema.py", problema)
+       + grupo("etiqueta-corregido", "Versión corregida", "banco_corregido.py", corregidas);
+}
+
 async function ejecutar(nombre) {
   const destino = document.getElementById(nombre);
   destino.textContent = "Ejecutando...";
@@ -326,8 +362,8 @@ async function ejecutar(nombre) {
   params.set("procesos", document.getElementById("num_procesos").value);
   const r = await fetch(`/api/${nombre}?${params}`, { method: "POST" });
   const datos = await r.json();
-  // Cada experimento devuelve un resultado por variante (sin_lock, con_lock, hilos, procesos...).
-  destino.innerHTML = Object.entries(datos).map(([k, v]) => tabla(k, v)).join("");
+  // Cada experimento devuelve un resultado por variante (con_problema, corregido, hilos, procesos...).
+  destino.innerHTML = porVersion(datos);
 }
 
 async function verEstadisticas() {

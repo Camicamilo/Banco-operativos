@@ -42,7 +42,8 @@ Ver `docs/arquitectura.md` (diagrama de componentes y de flujo). Resumen:
 - Persistencia de métricas: `resultados/estadisticas.csv` y `ejecuciones.jsonl`.
 
 ## 8. Diseño e implementación
-- `banco.py`: `Cuenta` (saldo + `threading.Lock`), `CuentaCompartida` (misma interfaz, saldo en memoria compartida), operaciones con y sin lock, `procesar()` y `Contador`.
+- `cuentas.py`: `Cuenta` (saldo + `threading.Lock`), `CuentaCompartida` (misma interfaz, saldo en memoria compartida), generador de transacciones y `Contador`.
+- `banco_con_problema.py` (versión con el problema) y `banco_corregido.py` (versión corregida): las mismas funciones con los mismos nombres; `diff` entre ambos muestra la corrección. La corregida incluye además lock global, dueño por cuenta y transferencia con reintento.
 - `experimentos.py`: los cinco experimentos, `Monitor` (lee `/proc/self/status` y `os.times()` cada 0,1 s), `registrar()`.
 - `pruebas.py`: ejecución con 2, 4, 8 y 16 hilos, verificación automática y tabla comparativa.
 - `observar.sh`: captura `pstree -pt`, `ps -eLf`, `ps -o ...`, `/proc/<PID>/status` y `top -H`.
@@ -51,11 +52,12 @@ Ver `docs/arquitectura.md` (diagrama de componentes y de flujo). Resumen:
 ## 9. Mecanismos de sincronización
 | Problema | Mecanismo | Dónde |
 |---|---|---|
-| Actualización perdida de saldo | `threading.Lock` por cuenta | `depositar_con_lock`, `retirar_con_lock` |
-| Retiro con saldo viejo (verificar-luego-actuar) | verificación y descuento en la misma sección crítica | `retirar_con_lock` |
+| Actualización perdida de saldo | `threading.Lock` por cuenta; alternativas: lock global y dueño por cuenta | `banco_corregido.depositar`, `retirar`, `depositar_lock_global`, `DuenoDeCuenta` |
+| Retiro con saldo viejo (verificar-luego-actuar) | verificación y descuento en la misma sección crítica | `banco_corregido.retirar` |
 | Búfer compartido | `queue.Queue(maxsize=100)` (lock + variables de condición internas) | experimento cola |
-| Espera circular | adquisición de locks en orden global por id | `transferir_ordenado` |
-| Detección de interbloqueo | `acquire(timeout=...)` | `transferir_ingenuo` |
+| Espera circular | adquisición de locks en orden global por id | `banco_corregido.transferir` |
+| Retención y espera | intentar el segundo lock sin bloquear; si falla, soltar y reintentar | `banco_corregido.transferir_reintentando` |
+| Detección de interbloqueo | `acquire(timeout=...)` | `banco_con_problema.transferir_ingenuo` |
 | Datos entre procesos | `multiprocessing.Array` + `multiprocessing.Lock` por cuenta (semáforo del SO) | experimento multiproceso |
 | Escritura del CSV desde varios hilos del servidor | `threading.Lock` | `registrar()` |
 

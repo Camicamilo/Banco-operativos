@@ -26,7 +26,9 @@ python3 pruebas.py --rapido   # solo para comprobar que todo funciona
 
 | Archivo | Qué hace |
 |---|---|
-| `banco.py` | `Cuenta`, `CuentaCompartida` y las operaciones (depósito, retiro, transferencia, consulta), con y sin protección |
+| `cuentas.py` | El modelo, sin decisiones de concurrencia: `Cuenta`, `CuentaCompartida`, generador de transacciones y `Contador` |
+| `banco_con_problema.py` | **Versión con problema**: depositar, retirar, transferir y consultar sin sincronización, y la transferencia ingenua que produce el interbloqueo |
+| `banco_corregido.py` | **Versión corregida**: las mismas funciones con los mismos nombres, sincronizadas, más tres correcciones extra (lock global, dueño por cuenta, transferencia con reintento) |
 | `experimentos.py` | Los 5 experimentos, el `Monitor` que mide cada proceso y el registro de estadísticas |
 | `servidor.py` | Servidor web + API JSON + vista de procesos |
 | `static/index.html` | La página (parámetros, botones y tablas) |
@@ -52,12 +54,27 @@ banco-servidor (python3 servidor.py, PID X)
 
 Los procesos se crean con `multiprocessing` en modo `spawn` (cada hijo es un intérprete nuevo) y aparecen como hijos del servidor en `pstree -pt <PID>`. Los nombres (`cola-0`, `{consumidor-2}`...) se ponen en el kernel con `prctl(PR_SET_NAME)` (vía `ctypes`), así se ven en `pstree -t`, `ps -eLf` y `top -H` en lugar de `python3`.
 
+## Versión con problema y versión corregida
+
+Las pautas piden conservar una versión funcional y una en la que se demuestre el problema. Están en dos archivos con **las mismas funciones y los mismos nombres**:
+
+```sh
+diff banco_con_problema.py banco_corregido.py   # muestra exactamente la corrección
+```
+
+Cada experimento ejecuta el mismo flujo con las dos versiones y la página muestra los resultados en dos bloques: **Versión con problema** y **Versión corregida**.
+
+| Problema | Versión con problema | Correcciones en `banco_corregido.py` |
+|---|---|---|
+| Condición de carrera | `depositar`, `retirar`, `transferir`, `consultar` sin protección | 1. **Lock por cuenta** (`with cuenta.lock`). 2. **Lock global**: corrige, pero un solo lock serializa todo el banco y es más lento (granularidad). 3. **Dueño por cuenta** (`DuenoDeCuenta`): un solo hilo modifica cada cuenta y los demás le envían mensajes; el saldo deja de ser compartido y no hace falta lock |
+| Interbloqueo | `transferir_ingenuo`: toma los locks en el orden de la transferencia | 4. **Orden global** (`transferir`): siempre la cuenta menor primero, rompe la **espera circular**. 5. **Intentar y soltar** (`transferir_reintentando`): si no consigue la segunda cuenta suelta la primera y reintenta tras una pausa al azar, rompe la **retención y espera** |
+
 ## Experimentos
 
-1. **Carrera** (5 cuentas): N hilos depositan $1 repartiéndose las cuentas, primero sin lock y luego con lock. Sin lock, `saldo = saldo + 1` son dos pasos (leer, escribir); si dos hilos leen el mismo valor, uno pisa al otro y se pierde dinero. El resultado muestra lo esperado, lo obtenido y lo perdido **por cuenta**. Con `Lock`, el par leer+escribir es una sección crítica: un solo hilo a la vez, y el resultado es exacto.
-2. **Cola productor-consumidor**: los productores ponen transacciones de los 4 tipos en una `queue.Queue` (limitada a 100) y los consumidores las procesan. Si la cola se llena, los productores esperan; si está vacía, los consumidores esperan. Los retiros y transferencias sin saldo suficiente se **rechazan** y se cuentan por tipo. Se verifica que `inicial + depositado − retirado = final` (`cuadra: true`).
-3. **Interbloqueo**: A→B y B→A al mismo tiempo. Con locks ingenuos cada hilo toma su cuenta de origen y espera la otra: se cumplen exclusión mutua, retención y espera, no expropiación y **espera circular**, así que ninguno avanza hasta que el timeout lo detecta y lo reporta como `bloqueo`. Con locks **ordenados por id** ambos hilos piden primero la cuenta menor, se rompe la espera circular y no puede ocurrir. Los parámetros *espera* y *timeout* (en la página) alargan la ventana: con 5 y 10 s hay tiempo de sobra para correr `observar.sh`.
-4. **Multiproceso**: el servidor (productor) pone transacciones en una `multiprocessing.Queue`; P procesos hijo, cada uno con N hilos, las consumen. Los saldos están en **memoria compartida** (`multiprocessing.Array`) con un `multiprocessing.Lock` por cuenta. Sin lock, hilos de **distintos procesos** leen y escriben el mismo saldo a la vez en núcleos distintos y el total no cuadra (`diferencia ≠ 0`). Incluso `esperado` puede salir negativo: se aprueban retiros mirando un saldo viejo, así que se "retira" más dinero del que existía. Con lock cuadra siempre.
+1. **Carrera** (5 cuentas): N hilos depositan $1 repartiéndose las cuentas, con la versión con problema y con las tres correcciones (`lock_por_cuenta`, `lock_global`, `dueno_por_cuenta`). Sin lock, `saldo = saldo + 1` son dos pasos (leer, escribir); si dos hilos leen el mismo valor, uno pisa al otro y se pierde dinero. El resultado muestra lo esperado, lo obtenido y lo perdido **por cuenta**. Con `Lock`, el par leer+escribir es una sección crítica: un solo hilo a la vez, y el resultado es exacto.
+2. **Cola productor-consumidor**: los productores ponen transacciones de los 4 tipos en una `queue.Queue` (limitada a 100) y los consumidores las procesan. Si la cola se llena, los productores esperan; si está vacía, los consumidores esperan. Los retiros y transferencias sin saldo suficiente se **rechazan** y se cuentan por tipo. Se verifica que `inicial + depositado − retirado = final` (`cuadra`). Se corre con las dos versiones: la cola es segura en ambas, pero con la versión con problema las cuentas se descuadran. **Una cola segura no protege los datos que se procesan después de sacarlos.**
+3. **Interbloqueo**: A→B y B→A al mismo tiempo. Con locks ingenuos cada hilo toma su cuenta de origen y espera la otra: se cumplen exclusión mutua, retención y espera, no expropiación y **espera circular**, así que ninguno avanza hasta que el timeout lo detecta y lo reporta como `bloqueo`. Se corrige de dos formas: con locks **ordenados por id** (`orden_global`) ambos hilos piden primero la cuenta menor y se rompe la espera circular; con **reintento**, el hilo que no consigue la segunda cuenta suelta la primera, espera un tiempo al azar y vuelve a intentar (la tabla `intentos` muestra cuántas veces). Los parámetros *espera* y *timeout* (en la página) alargan la ventana: con 5 y 10 s hay tiempo de sobra para correr `observar.sh`.
+4. **Multiproceso**: el servidor (productor) pone transacciones en una `multiprocessing.Queue`; P procesos hijo, cada uno con N hilos, las consumen. Los saldos están en **memoria compartida** (`multiprocessing.Array`) con un `multiprocessing.Lock` por cuenta. Con la versión con problema, hilos de **distintos procesos** leen y escriben el mismo saldo a la vez en núcleos distintos y el total no cuadra (`diferencia ≠ 0`). Incluso `esperado` puede salir negativo: se aprueban retiros mirando un saldo viejo, así que se "retira" más dinero del que existía. Con la versión corregida (un `multiprocessing.Lock` por cuenta) cuadra siempre.
 5. **Auditoría (CPU y memoria)**: cada trabajador firma transacciones con un cálculo en Python puro (CPU) y guarda un libro que crece (~9 KB por transacción, memoria). La misma carga se corre con N **hilos** en un proceso y con N **procesos**. El monitor toma muestras de `VmRSS` y `os.times()` durante la ejecución, y se calcula `nucleos_usados = CPU / tiempo real`.
 
 ## Por qué los hilos no aceleran la auditoría: el GIL
