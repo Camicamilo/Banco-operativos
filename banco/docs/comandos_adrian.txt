@@ -1,13 +1,125 @@
 ===============================================================================
  PROYECTO 4 - BANCO CONCURRENTE
- Comandos de la demo de Adrian Macias: arquitectura, procesos e hilos,
- multiproceso con memoria compartida
+ Comandos para la maquina virtual:
+   A. Condicion de carrera (version con problema)
+   B. Demo de Adrian Macias: arquitectura, procesos e hilos, multiproceso
 ===============================================================================
 
  Las lineas que empiezan con # son explicaciones: no hace falta copiarlas.
  Todo se corre dentro de la carpeta banco/ (NO dentro de evidencias/).
  Los PID que salgan en su VM seran distintos a los de los ejemplos.
+ Los comandos con varias lineas (for ... do ... done) se pegan COMPLETOS.
 
+
+###############################################################################
+ A. CONDICION DE CARRERA - VERSION CON PROBLEMA
+###############################################################################
+
+-------------------------------------------------------------------------------
+ A0. Preparacion
+-------------------------------------------------------------------------------
+
+cd ~/Banco-operativos/banco
+git pull origin main-olmpb1
+rm -rf resultados evidencias
+
+# Terminal 1 (dejarla abierta):
+python3 servidor.py
+
+# Navegador: http://localhost:8000
+# Tarjeta 1 "Condicion de carrera":  Hilos = 8   Operaciones por hilo = 100000
+# Corre 4 variantes seguidas; la PRIMERA es la version con problema.
+
+
+-------------------------------------------------------------------------------
+ A1. El codigo con el problema (antes de ejecutar) - Terminal 2
+-------------------------------------------------------------------------------
+
+cd ~/Banco-operativos/banco
+
+# depositar sin proteccion contra depositar con lock
+grep -n -A7 "^def depositar" banco_con_problema.py banco_corregido.py
+
+# Como reparte el experimento los depositos entre las 5 cuentas
+grep -n -A6 "def trabajo(i):" experimentos.py | head -8
+
+
+-------------------------------------------------------------------------------
+ A2. Dar clic en "Ejecutar" (tarjeta 1) y ENSEGUIDA correr esto
+-------------------------------------------------------------------------------
+
+# Proceso carrera-0 con sus 8 hilos (comparten la memoria = las mismas cuentas)
+pstree -pt $(pgrep -f '^python3 servidor.py')
+
+# Hilos del proceso: mismo PID, distinto LWP, estado y CPU
+ps -L -o pid,lwp,comm,stat,%cpu -p $(pgrep -x carrera-0)
+
+# Foto de top por hilo: mirar la linea %Cpu(s): "us" (Python) contra "sy" (kernel)
+top -H -b -n 1 -p $(pgrep -x carrera-0) | head -20
+
+# Cambios de contexto POR HILO (cada uno es una oportunidad para la carrera)
+P=$(pgrep -x carrera-0)
+for T in /proc/$P/task/*
+do
+  echo "$(cat $T/comm): $(grep -h voluntary_ctxt $T/status | tr '\n' ' ')"
+done
+
+# Ojo: /proc/PID/status solo muestra los del hilo principal (por eso salen bajos)
+grep ctxt /proc/$(pgrep -x carrera-0)/status
+
+# Guardar la evidencia completa
+sh observar.sh carrera_con_problema
+
+
+-------------------------------------------------------------------------------
+ A3. Plan B: todo junto (pegar apenas se da clic en "Ejecutar")
+-------------------------------------------------------------------------------
+
+sleep 2
+P=$(pgrep -x carrera-0)
+pstree -pt $(pgrep -f '^python3 servidor.py')
+ps -L -o pid,lwp,comm,stat,%cpu -p $P
+top -H -b -n 1 -p $P | head -20
+for T in /proc/$P/task/*
+do
+  echo "$(cat $T/comm): $(grep -h voluntary_ctxt $T/status | tr '\n' ' ')"
+done
+sh observar.sh carrera_con_problema
+
+
+-------------------------------------------------------------------------------
+ A4. Revisar el resultado
+-------------------------------------------------------------------------------
+
+# En la pagina: bloque rojo "Version con problema" -> dinero_perdido > 0
+# y la tabla por_cuenta (las 5 cuentas pierden dinero).
+
+# Lo que quedo guardado (columnas: variante, hilos, segundos, esperado, obtenido)
+grep carrera resultados/estadisticas.csv | cut -d, -f3,5,7,14,15
+
+# La captura de observar.sh (salir con q)
+less -S evidencias/carrera_con_problema_*.txt
+
+# Opcional, con el servidor detenido (Ctrl+C): perdida con 2, 4, 8 y 16 hilos
+python3 pruebas.py
+grep "carrera | con_problema" resultados/comparativa_*.md
+
+
+-------------------------------------------------------------------------------
+ A5. Que se debe ver (referencia)
+-------------------------------------------------------------------------------
+
+ pstree   banco-servidor -> carrera-0 con {hilo-0}..{hilo-7} y {monitor}.
+ ps -L    Mismo PID, LWP distintos; varios hilos en R (ejecutando) y S.
+ top      %Cpu(s) con "sy" (kernel) mucho mayor que "us" (usuario).
+ ctxt     Miles de cambios de contexto voluntarios por hilo de trabajo.
+ PAGINA   con_problema: obtenido < esperado, dinero_perdido > 0.
+          Las 3 correcciones: dinero_perdido = 0.
+
+
+###############################################################################
+ B. DEMO DE ADRIAN MACIAS - ARQUITECTURA, PROCESOS E HILOS, MULTIPROCESO
+###############################################################################
 
 -------------------------------------------------------------------------------
  0. PREPARACION (antes de presentar)
@@ -74,7 +186,12 @@ ps -o pid,ppid,nlwp,%cpu,rss,stat,etime,comm --ppid $(pgrep -f '^python3 servido
 ps -L -o pid,lwp,comm,stat,%cpu -p $(pgrep -x trabajador-0)
 
 # PASO 7: memoria compartida: los 3 procesos mapean la MISMA region (rw-s)
-for N in 0 1 2; do P=$(pgrep -x trabajador-$N); echo "trabajador-$N (PID $P):"; grep pym /proc/$P/maps; done
+for N in 0 1 2
+do
+  P=$(pgrep -x trabajador-$N)
+  echo "trabajador-$N (PID $P):"
+  grep pym /proc/$P/maps
+done
 
 # Semaforos (locks) y memoria compartida en /dev/shm
 ls -la /dev/shm/
@@ -92,7 +209,12 @@ S=$(pgrep -f '^python3 servidor.py'); sleep 2
 pstree -pt $S
 ps -o pid,ppid,nlwp,%cpu,rss,stat,etime,comm --ppid $S
 ps -L -o pid,lwp,comm,stat,%cpu -p $(pgrep -x trabajador-0)
-for N in 0 1 2; do P=$(pgrep -x trabajador-$N); echo "trabajador-$N (PID $P):"; grep pym /proc/$P/maps; done
+for N in 0 1 2
+do
+  P=$(pgrep -x trabajador-$N)
+  echo "trabajador-$N (PID $P):"
+  grep pym /proc/$P/maps
+done
 sh observar.sh multiproceso
 
 
