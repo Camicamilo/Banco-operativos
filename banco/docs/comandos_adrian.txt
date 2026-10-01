@@ -8,7 +8,8 @@
  Las lineas que empiezan con # son explicaciones: no hace falta copiarlas.
  Todo se corre dentro de la carpeta banco/ (NO dentro de evidencias/).
  Los PID que salgan en su VM seran distintos a los de los ejemplos.
- Los comandos con varias lineas (for ... do ... done) se pegan COMPLETOS.
+ Cada comando va en UNA sola linea: copiar la linea COMPLETA, hasta el final.
+ Si la terminal se queda con '>' es que la linea se corto: Ctrl+C y pegarla de nuevo.
 
 
 ###############################################################################
@@ -58,11 +59,7 @@ ps -L -o pid,lwp,comm,stat,%cpu -p $(pgrep -x carrera-0)
 top -H -b -n 1 -p $(pgrep -x carrera-0) | head -20
 
 # Cambios de contexto POR HILO (cada uno es una oportunidad para la carrera)
-P=$(pgrep -x carrera-0)
-for T in /proc/$P/task/*
-do
-  echo "$(cat $T/comm): $(grep -h voluntary_ctxt $T/status | tr '\n' ' ')"
-done
+for T in /proc/$(pgrep -x carrera-0)/task/*; do echo "$(cat $T/comm): $(grep -h voluntary_ctxt $T/status | tr '\n' ' ')"; done
 
 # Ojo: /proc/PID/status solo muestra los del hilo principal (por eso salen bajos)
 grep ctxt /proc/$(pgrep -x carrera-0)/status
@@ -75,16 +72,7 @@ sh observar.sh carrera_con_problema
  A3. Plan B: todo junto (pegar apenas se da clic en "Ejecutar")
 -------------------------------------------------------------------------------
 
-sleep 2
-P=$(pgrep -x carrera-0)
-pstree -pt $(pgrep -f '^python3 servidor.py')
-ps -L -o pid,lwp,comm,stat,%cpu -p $P
-top -H -b -n 1 -p $P | head -20
-for T in /proc/$P/task/*
-do
-  echo "$(cat $T/comm): $(grep -h voluntary_ctxt $T/status | tr '\n' ' ')"
-done
-sh observar.sh carrera_con_problema
+sleep 2; pstree -pt $(pgrep -f '^python3 servidor.py'); ps -L -o pid,lwp,comm,stat,%cpu -p $(pgrep -x carrera-0); top -H -b -n 1 -p $(pgrep -x carrera-0) | head -20; for T in /proc/$(pgrep -x carrera-0)/task/*; do echo "$(cat $T/comm): $(grep -h voluntary_ctxt $T/status | tr '\n' ' ')"; done; sh observar.sh carrera_con_problema
 
 
 -------------------------------------------------------------------------------
@@ -186,12 +174,7 @@ ps -o pid,ppid,nlwp,%cpu,rss,stat,etime,comm --ppid $(pgrep -f '^python3 servido
 ps -L -o pid,lwp,comm,stat,%cpu -p $(pgrep -x trabajador-0)
 
 # PASO 7: memoria compartida: los 3 procesos mapean la MISMA region (rw-s)
-for N in 0 1 2
-do
-  P=$(pgrep -x trabajador-$N)
-  echo "trabajador-$N (PID $P):"
-  grep pym /proc/$P/maps
-done
+for N in 0 1 2; do echo "trabajador-$N (PID $(pgrep -x trabajador-$N)):"; grep pym /proc/$(pgrep -x trabajador-$N)/maps; done
 
 # Semaforos (locks) y memoria compartida en /dev/shm
 ls -la /dev/shm/
@@ -205,17 +188,7 @@ sh observar.sh multiproceso
  Pegar este bloque completo apenas se da clic en "Ejecutar" (tarjeta 4)
 -------------------------------------------------------------------------------
 
-S=$(pgrep -f '^python3 servidor.py'); sleep 2
-pstree -pt $S
-ps -o pid,ppid,nlwp,%cpu,rss,stat,etime,comm --ppid $S
-ps -L -o pid,lwp,comm,stat,%cpu -p $(pgrep -x trabajador-0)
-for N in 0 1 2
-do
-  P=$(pgrep -x trabajador-$N)
-  echo "trabajador-$N (PID $P):"
-  grep pym /proc/$P/maps
-done
-sh observar.sh multiproceso
+sleep 2; pstree -pt $(pgrep -f '^python3 servidor.py'); ps -o pid,ppid,nlwp,%cpu,rss,stat,etime,comm --ppid $(pgrep -f '^python3 servidor.py'); ps -L -o pid,lwp,comm,stat,%cpu -p $(pgrep -x trabajador-0); for N in 0 1 2; do echo "trabajador-$N (PID $(pgrep -x trabajador-$N)):"; grep pym /proc/$(pgrep -x trabajador-$N)/maps; done; sh observar.sh multiproceso
 
 
 -------------------------------------------------------------------------------
