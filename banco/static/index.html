@@ -5,86 +5,283 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Banco concurrente</title>
 <style>
-  body { font-family: sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; color: #222; }
-  h1 { margin-bottom: 0; }
-  .tarjeta { border: 1px solid #ccc; border-radius: 8px; padding: 1rem; margin: 1rem 0; }
-  button { padding: .5rem 1rem; cursor: pointer; }
-  table { border-collapse: collapse; margin: .5rem 1rem .5rem 0; }
-  td, th { border: 1px solid #ddd; padding: .25rem .6rem; text-align: left; }
-  th { background: #f3f3f3; }
-  .resultados { display: flex; flex-wrap: wrap; }
-  .malo { color: #b00020; font-weight: bold; }
-  pre { background: #111; color: #ddd; padding: 1rem; overflow-x: auto; font-size: .8rem; }
-  label { margin-right: 1rem; }
-  input { width: 5rem; }
-  .nota { font-size: .85rem; color: #666; }
-  .ancha { overflow-x: auto; width: 100%; }
+  :root {
+    color-scheme: light dark;
+    --fondo: #f6f5f1;
+    --superficie: #ffffff;
+    --superficie-2: #efede7;
+    --tinta: #1d1f1e;
+    --tinta-2: #565b59;
+    --linea: #dcd9d1;
+    --linea-fuerte: #c4c0b6;
+    --acento: #1f5f4e;
+    --acento-hover: #174a3d;
+    --acento-tinta: #ffffff;
+    --error: #a3262a;
+    --error-fondo: #f8e6e5;
+    --terminal: #1c1e1d;
+    --terminal-tinta: #d8dcd5;
+    --radio: 6px;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, Cantarell, "Noto Sans", sans-serif;
+    --mono: ui-monospace, "SFMono-Regular", "DejaVu Sans Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --fondo: #141615;
+      --superficie: #1b1e1d;
+      --superficie-2: #222624;
+      --tinta: #e5e8e3;
+      --tinta-2: #a2a9a5;
+      --linea: #2d3230;
+      --linea-fuerte: #3d4441;
+      --acento: #63b79c;
+      --acento-hover: #7fc8b0;
+      --acento-tinta: #0e1915;
+      --error: #ff8f86;
+      --error-fondo: #3a1e1d;
+      --terminal: #0e100f;
+      --terminal-tinta: #d8dcd5;
+    }
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--fondo);
+    color: var(--tinta);
+    font: 400 1rem/1.55 var(--sans);
+    caret-color: var(--acento);
+    scrollbar-color: var(--linea-fuerte) transparent;
+  }
+  ::selection { background: var(--acento); color: var(--acento-tinta); }
+
+  .contenedor { max-width: 72rem; margin: 0 auto; padding: 0 1.25rem; }
+
+  /* Cabecera */
+  .cabecera { padding: 2.75rem 0 1.25rem; }
+  h1 { margin: 0; font-size: 1.75rem; line-height: 1.2; font-weight: 650; letter-spacing: -0.015em; }
+  .cabecera p { margin: .4rem 0 0; color: var(--tinta-2); max-width: 65ch; }
+
+  /* Parámetros globales */
+  .parametros {
+    background: var(--fondo);
+    border-top: 1px solid var(--linea);
+    border-bottom: 1px solid var(--linea);
+  }
+  .parametros .contenedor {
+    display: flex; flex-wrap: wrap; align-items: center; gap: .75rem 1.5rem;
+    padding-top: .75rem; padding-bottom: .75rem;
+  }
+  .parametros .nota { margin: 0; flex: 1 1 18rem; }
+
+  /* Controles */
+  label {
+    display: inline-flex; align-items: center; gap: .5rem;
+    font-size: .875rem; font-weight: 500; color: var(--tinta-2);
+  }
+  input[type="number"] {
+    width: 6.5rem; padding: .4rem .55rem;
+    font: 500 .9375rem/1.2 var(--sans); font-variant-numeric: tabular-nums;
+    color: var(--tinta); background: var(--superficie);
+    border: 1px solid var(--linea-fuerte); border-radius: var(--radio);
+    accent-color: var(--acento);
+    transition: border-color 150ms ease-out;
+  }
+  input[type="number"]:hover { border-color: var(--tinta-2); }
+
+  button {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-height: 2.25rem; padding: .45rem 1.1rem;
+    font: 600 .875rem/1 var(--sans);
+    border-radius: var(--radio); cursor: pointer;
+    transition: background-color 150ms ease-out, border-color 150ms ease-out, color 150ms ease-out;
+  }
+  /* Acción principal: ejecutar un experimento */
+  button[onclick^="ejecutar"] {
+    color: var(--acento-tinta); background: var(--acento); border: 1px solid var(--acento);
+  }
+  button[onclick^="ejecutar"]:hover { background: var(--acento-hover); border-color: var(--acento-hover); }
+  /* Acciones de consulta: ver estadísticas y procesos */
+  button:not([onclick^="ejecutar"]) {
+    color: var(--tinta); background: var(--superficie); border: 1px solid var(--linea-fuerte);
+  }
+  button:not([onclick^="ejecutar"]):hover { border-color: var(--tinta-2); }
+  button:active { transform: translateY(1px); }
+
+  :focus-visible { outline: 2px solid var(--acento); outline-offset: 2px; }
+  input:focus-visible { outline-offset: 1px; border-color: var(--acento); }
+
+  /* Secciones de experimentos: separadas por una línea, sin cajas */
+  .tarjeta { padding: 2.25rem 0; border-bottom: 1px solid var(--linea); }
+  .tarjeta:last-child { border-bottom: 0; padding-bottom: 4rem; }
+  h2 { margin: 0 0 .5rem; font-size: 1.25rem; line-height: 1.3; font-weight: 650; letter-spacing: -0.01em; }
+  .tarjeta > p { margin: 0 0 1.1rem; max-width: 70ch; color: var(--tinta-2); }
+  .tarjeta > p b { color: var(--tinta); font-weight: 600; }
+  .acciones { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem 1.25rem; }
+
+  code {
+    font: .85em var(--mono);
+    padding: .1em .35em; border-radius: 4px;
+    background: var(--superficie-2); color: var(--tinta);
+  }
+  .nota { font-size: .8125rem; color: var(--tinta-2); }
+
+  /* Resultados */
+  .resultados {
+    display: flex; flex-wrap: wrap; align-items: flex-start; gap: 1rem;
+    margin-top: 1.25rem;
+  }
+  .resultados:empty::before {
+    content: "Sin resultados todavía.";
+    font-size: .875rem; color: var(--tinta-2);
+  }
+  .resultados:not(:empty) { font-size: .875rem; color: var(--tinta-2); }
+
+  table {
+    border-collapse: separate; border-spacing: 0;
+    min-width: 15rem;
+    background: var(--superficie);
+    border: 1px solid var(--linea); border-radius: var(--radio);
+    font-size: .875rem; line-height: 1.35; color: var(--tinta);
+    font-variant-numeric: tabular-nums;
+    overflow: hidden;
+  }
+  th, td { padding: .4rem .75rem; text-align: left; vertical-align: top; }
+  td { border-top: 1px solid var(--linea); }
+  /* Fila de título de cada tabla */
+  tr:first-child > th {
+    padding: .55rem .75rem;
+    font-size: .875rem; font-weight: 650; color: var(--tinta);
+    background: var(--superficie-2);
+  }
+  /* Encabezados de columna en las tablas de listas */
+  tr + tr > th {
+    font-size: .75rem; font-weight: 600; color: var(--tinta-2);
+    border-top: 1px solid var(--linea); white-space: nowrap;
+  }
+  td:first-child { color: var(--tinta-2); }
+  td + td { color: var(--tinta); font-weight: 500; }
+  .ancha td:first-child { color: var(--tinta); }
+  tr:hover > td { background: var(--fondo); }
+
+  .malo { color: var(--error); background: var(--error-fondo); font-weight: 650; }
+
+  .ancha { width: 100%; overflow-x: auto; border-radius: var(--radio); }
+  .ancha table { min-width: 15rem; }
+  .ancha td { white-space: nowrap; }
+
+  /* Salida de comandos del sistema operativo */
+  pre {
+    margin: 1.25rem 0 0; padding: 1rem 1.15rem;
+    background: var(--terminal); color: var(--terminal-tinta);
+    border-radius: var(--radio);
+    font: .8125rem/1.5 var(--mono);
+    overflow-x: auto; tab-size: 4;
+    scrollbar-color: #4a504d transparent;
+  }
+  pre::selection { background: #3f6f60; color: #ffffff; }
+
+  @media (max-width: 40rem) {
+    .cabecera { padding-top: 1.75rem; }
+    h1 { font-size: 1.5rem; }
+    label { flex: 1 1 100%; justify-content: space-between; }
+    input[type="number"] { width: 8rem; }
+    .resultados > table { flex: 1 1 100%; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+  }
 </style>
 </head>
 <body>
-<h1>Banco concurrente</h1>
-<p>Procesa transacciones con hilos y muestra qué pasa con y sin sincronización.</p>
+<header class="cabecera">
+  <div class="contenedor">
+    <h1>Banco concurrente</h1>
+    <p>Procesa transacciones con hilos y muestra qué pasa con y sin sincronización.</p>
+  </div>
+</header>
 
-<label>Hilos <input id="hilos" type="number" value="8" min="2" max="32"></label>
-<label>Operaciones por hilo <input id="operaciones" type="number" value="5000" min="10"></label>
-<label>Procesos <input id="num_procesos" type="number" value="3" min="1" max="16"></label>
-<p class="nota">La cola y los procesos usan operaciones/10 por hilo; la auditoría usa operaciones/2.</p>
-
-<div class="tarjeta">
-  <h2>1. Condición de carrera</h2>
-  <p>Varios hilos depositan $1 repartidos en 5 cuentas. Se corre sin lock y con lock.</p>
-  <button onclick="ejecutar('carrera')">Ejecutar</button>
-  <div id="carrera" class="resultados"></div>
+<div class="parametros">
+  <div class="contenedor">
+    <label>Hilos <input id="hilos" type="number" value="8" min="2" max="32"></label>
+    <label>Operaciones por hilo <input id="operaciones" type="number" value="5000" min="10"></label>
+    <label>Procesos <input id="num_procesos" type="number" value="3" min="1" max="16"></label>
+    <p class="nota">La cola y los procesos usan operaciones/10 por hilo; la auditoría usa operaciones/2.</p>
+  </div>
 </div>
 
-<div class="tarjeta">
+<main class="contenedor">
+<section class="tarjeta">
+  <h2>1. Condición de carrera</h2>
+  <p>Varios hilos depositan $1 repartidos en 5 cuentas. Se corre sin lock y con lock.</p>
+  <div class="acciones">
+    <button onclick="ejecutar('carrera')">Ejecutar</button>
+  </div>
+  <div id="carrera" class="resultados"></div>
+</section>
+
+<section class="tarjeta">
   <h2>2. Cola productor-consumidor</h2>
   <p>Los productores encolan depósitos, retiros, transferencias y consultas; los consumidores las procesan.
      Los retiros y transferencias sin saldo se rechazan. Debe cumplirse: inicial + depositado − retirado = final.</p>
-  <button onclick="ejecutar('cola')">Ejecutar</button>
+  <div class="acciones">
+    <button onclick="ejecutar('cola')">Ejecutar</button>
+  </div>
   <div id="cola" class="resultados"></div>
-</div>
+</section>
 
-<div class="tarjeta">
+<section class="tarjeta">
   <h2>3. Interbloqueo</h2>
   <p>Dos transferencias cruzadas (A→B y B→A) a la vez. Primero con locks ingenuos y luego con locks ordenados.
      Sube la espera y el timeout (ej. 5 y 10) para alcanzar a capturarlo con <code>observar.sh</code>.</p>
-  <label>Espera (s) <input id="espera" type="number" value="0.1" min="0" step="0.1"></label>
-  <label>Timeout (s) <input id="timeout" type="number" value="1" min="0.1" step="0.5"></label>
-  <button onclick="ejecutar('interbloqueo')">Ejecutar</button>
+  <div class="acciones">
+    <label>Espera (s) <input id="espera" type="number" value="0.1" min="0" step="0.1"></label>
+    <label>Timeout (s) <input id="timeout" type="number" value="1" min="0.1" step="0.5"></label>
+    <button onclick="ejecutar('interbloqueo')">Ejecutar</button>
+  </div>
   <div id="interbloqueo" class="resultados"></div>
-</div>
+</section>
 
-<div class="tarjeta">
+<section class="tarjeta">
   <h2>4. Varios procesos trabajadores</h2>
   <p>El servidor encola transacciones en una cola entre procesos; varios procesos hijo, cada uno con varios hilos,
      las procesan sobre saldos en memoria compartida. Sin lock los procesos se pisan entre sí.</p>
-  <button onclick="ejecutar('multiproceso')">Ejecutar</button>
+  <div class="acciones">
+    <button onclick="ejecutar('multiproceso')">Ejecutar</button>
+  </div>
   <div id="multiproceso" class="resultados"></div>
-</div>
+</section>
 
-<div class="tarjeta">
+<section class="tarjeta">
   <h2>5. Auditoría: CPU y memoria</h2>
   <p>Cada trabajador firma transacciones (CPU) y guarda un libro que crece (memoria). La misma carga se corre
      con N hilos en un proceso y con N procesos. <b>nucleos_usados</b> = CPU / tiempo real: por el GIL los hilos
      no pasan de ~1.</p>
-  <button onclick="ejecutar('auditoria')">Ejecutar</button>
+  <div class="acciones">
+    <button onclick="ejecutar('auditoria')">Ejecutar</button>
+  </div>
   <div id="auditoria" class="resultados"></div>
-</div>
+</section>
 
-<div class="tarjeta">
+<section class="tarjeta">
   <h2>Estadísticas registradas</h2>
   <p>Últimas filas de <code>resultados/estadisticas.csv</code> (cada ejecución se guarda automáticamente).</p>
-  <button onclick="verEstadisticas()">Ver estadísticas</button>
+  <div class="acciones">
+    <button onclick="verEstadisticas()">Ver estadísticas</button>
+  </div>
   <div id="estadisticas" class="resultados"></div>
-</div>
+</section>
 
-<div class="tarjeta">
+<section class="tarjeta">
   <h2>Procesos e hilos (vista del sistema operativo)</h2>
   <p>Ejecútalo mientras corre un experimento para ver los procesos hijo y sus hilos.</p>
-  <button onclick="verProcesos()">Ver procesos</button>
+  <div class="acciones">
+    <button onclick="verProcesos()">Ver procesos</button>
+  </div>
   <pre id="procesos">Aún no consultado.</pre>
-</div>
+</section>
+</main>
 
 <script>
 // Una lista de objetos se dibuja como una tabla con columnas.
