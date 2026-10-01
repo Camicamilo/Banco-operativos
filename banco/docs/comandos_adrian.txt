@@ -1,0 +1,137 @@
+===============================================================================
+ PROYECTO 4 - BANCO CONCURRENTE
+ Comandos de la demo de Adrian Macias: arquitectura, procesos e hilos,
+ multiproceso con memoria compartida
+===============================================================================
+
+ Las lineas que empiezan con # son explicaciones: no hace falta copiarlas.
+ Todo se corre dentro de la carpeta banco/ (NO dentro de evidencias/).
+ Los PID que salgan en su VM seran distintos a los de los ejemplos.
+
+
+-------------------------------------------------------------------------------
+ 0. PREPARACION (antes de presentar)
+-------------------------------------------------------------------------------
+
+cd ~/Banco-operativos/banco
+git pull origin main-olmpb1
+rm -rf resultados evidencias
+
+# Debe decir 2 o mas (ideal 4). Con 1 nucleo no se ve el paralelismo.
+nproc
+
+# Verificar que esta la version nueva (deben salir los dos archivos):
+ls banco_con_problema.py banco_corregido.py
+
+# Si el puerto 8000 quedo ocupado de antes:
+fuser -k 8000/tcp
+
+
+-------------------------------------------------------------------------------
+ TERMINAL 1: arrancar el servidor (dejarla abierta)
+-------------------------------------------------------------------------------
+
+cd ~/Banco-operativos/banco
+python3 servidor.py
+
+# Navegador: http://localhost:8000
+# Tarjeta 4 "Varios procesos trabajadores":
+#   Procesos = 3    Hilos = 4    Operaciones por hilo = 50000
+
+
+-------------------------------------------------------------------------------
+ TERMINAL 2: todos los comandos de la demo
+-------------------------------------------------------------------------------
+
+cd ~/Banco-operativos/banco
+
+# --- PASO 2: arquitectura -----------------------------------------------------
+
+# Archivos del proyecto
+ls *.py
+
+# Las dos versiones tienen las mismas funciones
+grep -n "^def " banco_con_problema.py banco_corregido.py
+
+# Diferencia completa entre la version con problema y la corregida (salir con q)
+diff banco_con_problema.py banco_corregido.py | less
+
+
+# --- PASO 3: el proceso principal en reposo -------------------------------------
+
+pstree -pt $(pgrep -f '^python3 servidor.py')
+
+
+# --- PASOS 4 a 7: dar clic en "Ejecutar" (tarjeta 4) y ENSEGUIDA correr esto ---
+
+# PASO 4: arbol de procesos e hilos (sin llaves = proceso, {llaves} = hilo)
+pstree -pt $(pgrep -f '^python3 servidor.py')
+
+# PASO 5: procesos hijo del servidor: PPID, numero de hilos, CPU y memoria
+ps -o pid,ppid,nlwp,%cpu,rss,stat,etime,comm --ppid $(pgrep -f '^python3 servidor.py')
+
+# PASO 6: los hilos de un proceso (mismo PID, distinto LWP)
+ps -L -o pid,lwp,comm,stat,%cpu -p $(pgrep -x trabajador-0)
+
+# PASO 7: memoria compartida: los 3 procesos mapean la MISMA region (rw-s)
+for N in 0 1 2; do P=$(pgrep -x trabajador-$N); echo "trabajador-$N (PID $P):"; grep pym /proc/$P/maps; done
+
+# Semaforos (locks) y memoria compartida en /dev/shm
+ls -la /dev/shm/
+
+# Guardar la evidencia completa en evidencias/
+sh observar.sh multiproceso
+
+
+-------------------------------------------------------------------------------
+ PLAN B: todo junto de una sola vez
+ Pegar este bloque completo apenas se da clic en "Ejecutar" (tarjeta 4)
+-------------------------------------------------------------------------------
+
+S=$(pgrep -f '^python3 servidor.py'); sleep 2
+pstree -pt $S
+ps -o pid,ppid,nlwp,%cpu,rss,stat,etime,comm --ppid $S
+ps -L -o pid,lwp,comm,stat,%cpu -p $(pgrep -x trabajador-0)
+for N in 0 1 2; do P=$(pgrep -x trabajador-$N); echo "trabajador-$N (PID $P):"; grep pym /proc/$P/maps; done
+sh observar.sh multiproceso
+
+
+-------------------------------------------------------------------------------
+ DESPUES: revisar lo que quedo guardado
+-------------------------------------------------------------------------------
+
+# Capturas de observar.sh (abrir sin que se partan las lineas; salir con q)
+ls evidencias/
+less -S evidencias/multiproceso_*.txt
+
+# Filas del multiproceso en las estadisticas
+grep multiproceso resultados/estadisticas.csv
+
+
+-------------------------------------------------------------------------------
+ AL TERMINAR: detener el servidor
+-------------------------------------------------------------------------------
+
+# En la terminal 1: Ctrl + C
+# Si no se detiene o el puerto queda ocupado:
+fuser -k 8000/tcp
+
+# Verificar que no quedo nada corriendo (no debe imprimir nada):
+pgrep -af servidor.py
+
+
+-------------------------------------------------------------------------------
+ QUE SE DEBE VER (referencia)
+-------------------------------------------------------------------------------
+
+ PASO 4  banco-servidor con trabajador-0, trabajador-1, trabajador-2 como hijos;
+         cada uno con {hilo-0}..{hilo-3} y {monitor};
+         {banco-servidor} x2 = hilos del servidor (peticion + alimentador de la cola);
+         python3 = resource_tracker de multiprocessing.
+ PASO 5  PPID = PID del servidor; NLWP = 6 (4 hilos + monitor + principal);
+         %CPU de cada trabajador alto al mismo tiempo; RSS ~21 MB cada uno.
+ PASO 6  Mismo PID, LWP distintos; estados R (ejecutando) y S (esperando).
+ PASO 7  Misma linea /dev/shm/pym-<PID servidor>-... en los 3 procesos,
+         permisos rw-s (s = compartida), direcciones virtuales distintas.
+ PAGINA  Version con problema: diferencia != 0, cuadra = false.
+         Version corregida:    diferencia = 0,  cuadra = true.
